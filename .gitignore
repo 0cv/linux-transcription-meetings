@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Recordings
+*.wav
+*.mp3
+*.mp4
+*.m4a
+*.flac
+*.ogg
+
+# Whisper models
+*.bin
+*.pt
+
+# Environment
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
