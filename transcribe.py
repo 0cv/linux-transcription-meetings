@@ -25,6 +25,7 @@ Requirements:
 import argparse
 import json
 import os
+import re
 import sys
 import subprocess
 import tempfile
@@ -1104,7 +1105,11 @@ diarized to identify other speakers as "Speaker 1", "Speaker 2", etc.
         base = Path(system_path).stem
         if base.endswith("_system"):
             base = base[:-7]
-        date_prefix = datetime.now().strftime("%Y-%m-%d")
+        # Avoid double date prefix if base already starts with YYYY-MM-DD
+        if re.match(r"\d{4}-\d{2}-\d{2}", base):
+            date_prefix = ""
+        else:
+            date_prefix = datetime.now().strftime("%Y-%m-%d")
 
         print("=" * 60)
         print("🎙️  Meeting Transcriber — Dual-Channel Mode")
@@ -1148,7 +1153,10 @@ diarized to identify other speakers as "Speaker 1", "Speaker 2", etc.
         os.makedirs(output_dir, exist_ok=True)
 
         base = Path(audio_path).stem
-        date_prefix = datetime.now().strftime("%Y-%m-%d")
+        if re.match(r"\d{4}-\d{2}-\d{2}", base):
+            date_prefix = ""
+        else:
+            date_prefix = datetime.now().strftime("%Y-%m-%d")
 
         print("=" * 60)
         print("🎙️  Meeting Transcriber — Single-File Mode")
@@ -1226,20 +1234,21 @@ diarized to identify other speakers as "Speaker 1", "Speaker 2", etc.
     obsidian_note = generate_obsidian_note(source_label, transcript_text, summary, metadata)
 
     # --- Write outputs ---
-    note_filename = f"{date_prefix}_{base}.md"
+    prefix = f"{date_prefix}_" if date_prefix else ""
+    note_filename = f"{prefix}{base}.md"
     note_path = os.path.join(output_dir, note_filename)
     with open(note_path, "w", encoding="utf-8") as f:
         f.write(obsidian_note)
     print(f"\n📄 Obsidian note saved: {note_path}")
 
-    txt_filename = f"{date_prefix}_{base}_transcript.txt"
+    txt_filename = f"{prefix}{base}_transcript.txt"
     txt_path = os.path.join(output_dir, txt_filename)
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(transcript_text)
     print(f"📄 Transcript saved:   {txt_path}")
 
     if args.json:
-        json_filename = f"{date_prefix}_{base}_transcript.json"
+        json_filename = f"{prefix}{base}_transcript.json"
         json_path = os.path.join(output_dir, json_filename)
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(segments, f, indent=2, ensure_ascii=False)

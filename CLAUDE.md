@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A meeting transcription pipeline for Linux (Fedora/PipeWire). Two scripts:
 
-- **`capture.py`** — Records audio from system monitor (meeting audio) and/or microphone via `parec` → `ffmpeg`. Dual-source mode records both as separate WAV files, then merges into a stereo file (L=mic, R=system).
+- **`capture.py`** — Records audio from system monitor (meeting audio) and/or microphone via `parec` → `ffmpeg`. Dual-source mode records both as separate WAV files, then merges into a stereo file (L=mic, R=system). WAVs go to `/tmp/meetings`; notes go to the Obsidian vault.
 - **`transcribe.py`** — Transcribes audio with Whisper, optionally diarizes speakers, summarizes with an LLM, and outputs Obsidian-formatted meeting notes.
+- **`calendar_ms.py`** — Microsoft 365 calendar integration via MSAL device code flow + Graph API. Auto-names recordings after the current Outlook meeting.
 
 ## Setup
 
@@ -46,7 +47,9 @@ Uses `pactl` for source discovery and `parec` piped into `ffmpeg` for recording.
 - `DualRecorder` — runs two `ParecRecorder` instances in parallel (mic + system monitor), merges output into stereo WAV
 - `SingleRecorder` — wraps `ParecRecorder` for system-only or mic-only mode
 
-All audio is captured at 16kHz mono (per-track). On stop, `DualRecorder` merges via `ffmpeg amerge` into stereo.
+All audio is captured at 16kHz mono (per-track). On stop, `DualRecorder` merges via `ffmpeg amerge` into stereo. WAV files are stored in `--recordings-dir` (default `/tmp/meetings`), separate from the Obsidian notes directory (`--output`).
+
+If no `--name` is given, `capture.py` queries Microsoft 365 calendar via `calendar_ms.get_current_meeting()` to auto-name the recording after the current meeting. Falls back to `meeting_{timestamp}` if unavailable.
 
 ### Transcription (`transcribe.py`)
 
@@ -69,7 +72,9 @@ Domain-specific vocabulary (names, products, terms). Loaded automatically from t
 
 ## Key Details
 
-- Default output directory: `~/Documents/notes2/meetings`
+- Default recordings directory: `/tmp/meetings` (WAV files)
+- Default notes directory: `~/Documents/notes2/meetings` (Obsidian markdown)
 - whisper.cpp model files are auto-downloaded if missing via the bundled `download-ggml-model.sh` script
 - Claude auth precedence: `CLAUDE_CODE_OAUTH_TOKEN` → `ANTHROPIC_API_KEY` → `claude` CLI on PATH
+- Calendar auth: `MS_CALENDAR_CLIENT_ID` env var or `~/.cache/meeting-transcriber/config.json`. Token cache at `~/.cache/meeting-transcriber/ms_token_cache.json`
 - pyannote diarization requires accepting terms at `huggingface.co/pyannote/speaker-diarization-3.1` and setting `HF_TOKEN`

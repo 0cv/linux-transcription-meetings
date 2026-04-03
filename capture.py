@@ -407,11 +407,16 @@ Examples:
         default=None,
         help="Custom name for the recording (default: meeting_<timestamp>)",
     )
+    parser.add_argument(
+        "--recordings-dir",
+        default="/tmp/meetings",
+        help="Directory for WAV recording files (default: /tmp/meetings)",
+    )
     _default_output = os.path.expanduser("~/Documents/notes2/meetings")
     parser.add_argument(
         "--output", "-o",
         default=_default_output,
-        help=f"Output directory for recordings and notes (default: {_default_output})",
+        help=f"Output directory for Obsidian notes (default: {_default_output})",
     )
     parser.add_argument(
         "--auto", "-a",
@@ -445,6 +450,11 @@ Examples:
         default="claude",
         choices=["claude", "ollama", "openai"],
         help="LLM backend for summarization (default: claude — uses your OAuth token)",
+    )
+    parser.add_argument(
+        "--no-calendar",
+        action="store_true",
+        help="Skip Microsoft 365 calendar lookup for meeting name",
     )
     parser.add_argument(
         "--dictionary", "--dict",
@@ -504,12 +514,30 @@ Examples:
     # --- Determine recording mode ---
     dual_mode = not args.system_only and not args.mic_only and monitor_src and mic_src
 
-    # --- Set up output ---
+    # --- Set up output directories ---
+    recordings_dir = os.path.abspath(args.recordings_dir)
     output_dir = os.path.abspath(args.output)
+    os.makedirs(recordings_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    base_name = args.name or f"meeting_{timestamp}"
+    date_prefix = datetime.now().strftime("%Y-%m-%d")
+
+    if args.name:
+        base_name = args.name
+    else:
+        meeting_info = None
+        if not args.no_calendar:
+            try:
+                from calendar_ms import get_current_meeting, sanitize_filename
+                meeting_info = get_current_meeting()
+            except Exception:
+                pass
+        if meeting_info and meeting_info.get("subject"):
+            base_name = f"{date_prefix}_{sanitize_filename(meeting_info['subject'])}"
+            print(f"  📅 Calendar meeting: {meeting_info['subject']}")
+        else:
+            base_name = f"meeting_{timestamp}"
 
     # --- Print info ---
     print("=" * 60)
@@ -525,7 +553,8 @@ Examples:
     else:
         print(f"  Mode:    System only")
         print(f"  📡 System: [{monitor_src['index']}] {monitor_src['description']}")
-    print(f"  Output:  {output_dir}/{base_name}_*.wav")
+    print(f"  Recordings: {recordings_dir}/{base_name}_*.wav")
+    print(f"  Notes:      {output_dir}/")
     print(f"  Auto-transcribe: {'yes' if args.auto else 'no'}")
     print("=" * 60)
     print()
@@ -537,7 +566,7 @@ Examples:
         recorder = DualRecorder(
             monitor_source=monitor_src["name"],
             mic_source=mic_src["name"],
-            output_dir=output_dir,
+            output_dir=recordings_dir,
             base_name=base_name,
         )
         recorder.start()
@@ -578,7 +607,7 @@ Examples:
             src_name = monitor_src["name"]
             label = "system"
 
-        wav_path = os.path.join(output_dir, f"{base_name}_{label}.wav")
+        wav_path = os.path.join(recordings_dir, f"{base_name}_{label}.wav")
         recorder = SingleRecorder(src_name, wav_path, label=label)
         recorder.start()
 

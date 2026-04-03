@@ -58,6 +58,10 @@ echo "📦 Installing live capture dependencies..."
 pip install sounddevice numpy scipy
 
 echo ""
+echo "📦 Installing calendar integration dependencies..."
+pip install msal requests
+
+echo ""
 echo "📦 Installing summarization support..."
 pip install anthropic              # Claude (default — uses your Claude Code OAuth token)
 pip install ollama                 # Qwen 3 / Llama via Ollama (fully local alternative)
