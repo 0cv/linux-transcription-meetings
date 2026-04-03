@@ -452,9 +452,9 @@ Examples:
         help="LLM backend for summarization (default: claude — uses your OAuth token)",
     )
     parser.add_argument(
-        "--no-calendar",
+        "--no-detect",
         action="store_true",
-        help="Skip Microsoft 365 calendar lookup for meeting name",
+        help="Skip auto-detection of meeting name from window titles",
     )
     parser.add_argument(
         "--dictionary", "--dict",
@@ -527,12 +527,14 @@ Examples:
         base_name = args.name
     else:
         meeting_info = None
-        if not args.no_calendar:
+        if not args.no_detect:
             try:
-                from calendar_ms import get_current_meeting, sanitize_filename
+                from meeting_detect import get_current_meeting, sanitize_filename
+            except ImportError:
+                print("  ⚠️  meeting_detect module not found, skipping meeting name detection.")
+                get_current_meeting = None
+            if get_current_meeting:
                 meeting_info = get_current_meeting()
-            except Exception:
-                pass
         if meeting_info and meeting_info.get("subject"):
             base_name = f"{date_prefix}_{sanitize_filename(meeting_info['subject'])}"
             print(f"  📅 Calendar meeting: {meeting_info['subject']}")

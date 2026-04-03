@@ -103,28 +103,17 @@ Two approaches depending on engine:
   1. Accept terms at [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
   2. Set `HF_TOKEN` environment variable
 
-## Microsoft 365 Calendar Integration
+## Automatic Meeting Name Detection
 
-When you start recording without `--name`, the tool automatically queries your Outlook calendar to find the current meeting and names the recording + notes accordingly (e.g., `2026-04-02_weekly-standup.md`).
+When you start recording without `--name`, the tool scans your window titles for an active Teams, Zoom, or Google Meet meeting and names the recording + notes accordingly (e.g., `2026-04-02_weekly-standup.md`).
 
-### One-time setup
+Requires `kdotool` (KDE Plasma on Wayland):
 
-1. Go to [Azure Portal > App registrations](https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade) > **New registration**
-2. Name it "Meeting Transcriber", select your org's account type
-3. Under **Authentication**, enable **Allow public client flows**
-4. Under **API permissions**, add **Calendars.Read** (delegated)
-5. Copy the **Application (client) ID** and set it:
-   ```bash
-   export MS_CALENDAR_CLIENT_ID=<your-client-id>
-   ```
-   Or save it to `~/.cache/meeting-transcriber/config.json`:
-   ```json
-   {"client_id": "<your-client-id>"}
-   ```
+```bash
+sudo dnf install kdotool
+```
 
-On first use, you'll be prompted to authenticate via browser (device code flow). Tokens are cached at `~/.cache/meeting-transcriber/ms_token_cache.json` and auto-refreshed.
-
-Use `--no-calendar` to skip the lookup, or `--name "my-meeting"` to override it.
+Use `--no-detect` to skip the lookup, or `--name "my-meeting"` to set it manually.
 
 ## Output
 

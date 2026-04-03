@@ -8,7 +8,7 @@ A meeting transcription pipeline for Linux (Fedora/PipeWire). Two scripts:
 
 - **`capture.py`** — Records audio from system monitor (meeting audio) and/or microphone via `parec` → `ffmpeg`. Dual-source mode records both as separate WAV files, then merges into a stereo file (L=mic, R=system). WAVs go to `/tmp/meetings`; notes go to the Obsidian vault.
 - **`transcribe.py`** — Transcribes audio with Whisper, optionally diarizes speakers, summarizes with an LLM, and outputs Obsidian-formatted meeting notes.
-- **`calendar_ms.py`** — Microsoft 365 calendar integration via MSAL device code flow + Graph API. Auto-names recordings after the current Outlook meeting.
+- **`meeting_detect.py`** — Auto-detects the current meeting name by scanning window titles (Teams/Zoom/Meet) via `kdotool` on KDE Wayland.
 
 ## Setup
 
@@ -49,7 +49,7 @@ Uses `pactl` for source discovery and `parec` piped into `ffmpeg` for recording.
 
 All audio is captured at 16kHz mono (per-track). On stop, `DualRecorder` merges via `ffmpeg amerge` into stereo. WAV files are stored in `--recordings-dir` (default `/tmp/meetings`), separate from the Obsidian notes directory (`--output`).
 
-If no `--name` is given, `capture.py` queries Microsoft 365 calendar via `calendar_ms.get_current_meeting()` to auto-name the recording after the current meeting. Falls back to `meeting_{timestamp}` if unavailable.
+If no `--name` is given, `capture.py` scans window titles via `meeting_detect.get_current_meeting()` to auto-name the recording after the active Teams/Zoom/Meet meeting. Falls back to `meeting_{timestamp}` if no meeting window is found.
 
 ### Transcription (`transcribe.py`)
 
@@ -76,5 +76,5 @@ Domain-specific vocabulary (names, products, terms). Loaded automatically from t
 - Default notes directory: `~/Documents/notes2/meetings` (Obsidian markdown)
 - whisper.cpp model files are auto-downloaded if missing via the bundled `download-ggml-model.sh` script
 - Claude auth precedence: `CLAUDE_CODE_OAUTH_TOKEN` → `ANTHROPIC_API_KEY` → `claude` CLI on PATH
-- Calendar auth: `MS_CALENDAR_CLIENT_ID` env var or `~/.cache/meeting-transcriber/config.json`. Token cache at `~/.cache/meeting-transcriber/ms_token_cache.json`
+- Meeting name detection requires `kdotool` (`sudo dnf install kdotool`) for KDE Plasma on Wayland
 - pyannote diarization requires accepting terms at `huggingface.co/pyannote/speaker-diarization-3.1` and setting `HF_TOKEN`
