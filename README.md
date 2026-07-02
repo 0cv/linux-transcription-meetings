@@ -5,9 +5,9 @@ Capture and transcribe meeting audio on Linux. Records your microphone and syste
 ## How It Works
 
 1. **Capture** — Records mic and system audio simultaneously via PipeWire/PulseAudio as separate WAV files
-2. **Transcribe** — Runs Whisper (CPU or GPU via whisper.cpp + Vulkan) on each track
+2. **Transcribe** — Runs Python Whisper on each track
 3. **Tag speakers** — Your mic is always labeled "Me"; other speakers are diarized as "Speaker 1", "Speaker 2", etc.
-4. **Summarize** — Optionally generates structured meeting notes via Claude, Ollama, or OpenAI
+4. **Summarize** — Optionally generates structured meeting notes through the local Codex CLI using GPT-5.5 xhigh reasoning
 5. **Output** — Obsidian-compatible markdown with YAML frontmatter, plus plain-text transcript
 
 ## Requirements
@@ -22,84 +22,73 @@ Capture and transcribe meeting audio on Linux. Records your microphone and syste
 ./setup.sh
 ```
 
-This installs OpenAI Whisper, CPU-only PyTorch, calendar integration (msal), and summarization libraries (anthropic, ollama, openai).
+This creates a repo-local `.venv`, installs local Python Whisper (`openai-whisper`) with CPU-only PyTorch, and adds a `meeting` launcher in `~/.local/bin`. It does not require NVIDIA CUDA.
 
-### Optional: GPU acceleration with whisper.cpp + Vulkan
-
-For AMD GPUs (no ROCm needed):
+Log in to Codex CLI before using summaries:
 
 ```bash
-sudo dnf install vulkan-loader vulkan-headers vulkan-tools vulkan-validation-layers
-
-cd ~ && git clone https://github.com/ggml-org/whisper.cpp
-cd whisper.cpp
-cmake -B build -DGGML_VULKAN=1
-cmake --build build -j
-bash models/download-ggml-model.sh large-v3-turbo
+codex login
 ```
 
-Verify your GPU is detected: `vulkaninfo --summary`
+`whisper.cpp` was removed from this machine. The local Homebrew `llama.cpp` install is useful for GGUF text/multimodal models, but it is not a drop-in audio transcription backend for this repo.
 
 ## Usage
 
 ### List audio sources
 
 ```bash
-python capture.py
+.venv/bin/python capture.py
 ```
 
 ### Record and transcribe
 
 ```bash
+# Shortcut: record, transcribe, and summarize with local Codex CLI GPT-5.5 xhigh
+meeting
+
 # Record mic + system audio, stop with Ctrl+C
-python capture.py --record
+.venv/bin/python capture.py --record
 
 # Full pipeline: record → transcribe → diarize → summarize
-python capture.py --record --auto --diarize --summarize
+.venv/bin/python capture.py --record --auto --diarize --summarize
 
-# GPU-accelerated
-python capture.py --record --auto --engine whisper-cpp --diarize --summarize
-
-# Summarize locally with Ollama instead of Claude
-python capture.py --record --auto --diarize --summarize --llm ollama
+# Explicit Codex CLI summary settings
+.venv/bin/python capture.py --record --auto --summarize --codex-model gpt-5.5 --reasoning-effort xhigh
 ```
 
 ### Transcribe existing files
 
 ```bash
 # Dual-channel (recommended)
-python transcribe.py --mic mic.wav --system system.wav --diarize --summarize
+.venv/bin/python transcribe.py --mic mic.wav --system system.wav --diarize --summarize
 
 # Single file
-python transcribe.py meeting.wav --diarize --summarize
+.venv/bin/python transcribe.py meeting.wav --diarize --summarize
 ```
 
 ### Specify audio sources manually
 
 ```bash
-python capture.py --record --mic 5 --monitor 3
+.venv/bin/python capture.py --record --mic 5 --monitor 3
 ```
 
-## Summarization Backends
+## Summarization
 
-| Backend | Flag | Auth | Notes |
-|---------|------|------|-------|
-| **Claude** (default) | `--llm claude` | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | Uses `claude` CLI pipe mode or SDK |
-| **Ollama** | `--llm ollama` | None (local) | Default model: `qwen3:8b`. Install from [ollama.com](https://ollama.com) |
-| **OpenAI** | `--llm openai` | `OPENAI_API_KEY` | Default model: `gpt-4o-mini` |
+Summaries use only the local Codex CLI through `codex exec`.
+
+Defaults:
+- Model: `gpt-5.5`
+- Reasoning effort: `xhigh`
 
 ## Vocabulary Dictionary
 
 Edit `dictionary.txt` to add names, products, and domain terms. These are:
 - Fed to Whisper as a prompt to bias the decoder toward correct spellings
-- Included in the LLM summary prompt for post-correction
+- Included in the Codex summary prompt for post-correction
 
 ## Diarization
 
-Two approaches depending on engine:
-
-- **whisper-cpp** — Uses built-in tinydiarize (`-tdrz`). No extra setup needed.
-- **whisper (Python)** — Uses [pyannote.audio](https://github.com/pyannote/pyannote-audio). Requires:
+Python Whisper diarization uses [pyannote.audio](https://github.com/pyannote/pyannote-audio). It requires:
   1. Accept terms at [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
   2. Set `HF_TOKEN` environment variable
 

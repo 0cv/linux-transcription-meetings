@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_path="${BASH_SOURCE[0]}"
+if command -v readlink >/dev/null 2>&1; then
+  resolved="$(readlink -f "$script_path" 2>/dev/null || true)"
+  if [ -n "$resolved" ]; then
+    script_path="$resolved"
+  fi
+fi
+
+repo_dir="$(cd "$(dirname "$script_path")" && pwd)"
+cd "$repo_dir"
+
+if [ -n "${TRANSCRIPTION_PYTHON:-}" ]; then
+  python_bin="$TRANSCRIPTION_PYTHON"
+elif [ -x "$repo_dir/.venv/bin/python" ]; then
+  python_bin="$repo_dir/.venv/bin/python"
+else
+  python_bin="${PYTHON:-python3}"
+fi
+
+exec "$python_bin" "$repo_dir/capture.py" --record --auto --summarize "$@"

@@ -2,12 +2,12 @@
 """
 Meeting Transcriber CLI
 =======================
-Transcribes meeting audio using OpenAI Whisper, identifies speakers,
+Transcribes meeting audio using local Python Whisper, identifies speakers,
 and generates Obsidian-ready meeting notes.
 
 Supports two modes:
-  1. Single file:    python transcribe.py meeting.wav
-  2. Dual-channel:   python transcribe.py --mic mic.wav --system system.wav
+  1. Single file:    .venv/bin/python transcribe.py meeting.wav
+  2. Dual-channel:   .venv/bin/python transcribe.py --mic mic.wav --system system.wav
 
 Dual-channel mode is the recommended approach for live meetings:
   - Your mic track is tagged as "Me" automatically
@@ -18,8 +18,7 @@ Dual-channel mode is the recommended approach for live meetings:
 Requirements:
     pip install openai-whisper
     pip install pyannote.audio          # for --diarize
-    pip install ollama                   # for --summarize with local LLM
-    # OR set OPENAI_API_KEY env var      # for --summarize with OpenAI
+    codex login                         # for --summarize with Codex CLI
 """
 
 import argparse
@@ -29,8 +28,13 @@ import re
 import sys
 import subprocess
 import tempfile
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+
+DEFAULT_CODEX_MODEL = "gpt-5.5"
+DEFAULT_REASONING_EFFORT = "xhigh"
+REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh")
 
 
 # ---------------------------------------------------------------------------
@@ -99,12 +103,16 @@ def transcribe_audio(audio_path: str, model_name: str = "turbo",
                      dictionary_terms: list[str] | None = None) -> dict:
     """Run Whisper transcription and return the result dict.
 
-    engine: "whisper" (Python, CPU) or "whisper-cpp" (C++, Vulkan GPU).
+    engine: "whisper" (Python, CPU) or "whisper-cpp" (legacy whisper-cli).
     diarize: When True and engine is whisper-cpp, enables -tdrz speaker turns.
     dictionary_terms: List of vocabulary terms to bias the decoder toward.
     """
     if engine == "whisper-cpp":
-        return transcribe_audio_cpp(audio_path, model_name, language, task, diarize, dictionary_terms)
+        try:
+            return transcribe_audio_cpp(audio_path, model_name, language, task, diarize, dictionary_terms)
+        except FileNotFoundError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
 
     import whisper
 
@@ -112,7 +120,7 @@ def transcribe_audio(audio_path: str, model_name: str = "turbo",
     model = whisper.load_model(model_name)
 
     print(f"📝 Transcribing: {os.path.basename(audio_path)}")
-    options = {"task": task, "verbose": False}
+    options = {"task": task, "verbose": False, "fp16": False}
     if language:
         options["language"] = language
 
@@ -122,10 +130,10 @@ def transcribe_audio(audio_path: str, model_name: str = "turbo",
 
 
 # ---------------------------------------------------------------------------
-# whisper.cpp backend (Vulkan GPU-accelerated)
+# Legacy whisper.cpp backend
 # ---------------------------------------------------------------------------
 
-# Model name mapping: OpenAI Python names → ggml model file names
+# Model name mapping: Python Whisper names → ggml model file names
 _CPP_MODEL_MAP = {
     "tiny":   "ggml-tiny.bin",
     "base":   "ggml-base.bin",
@@ -169,6 +177,20 @@ def _find_whisper_cpp() -> tuple[str, str]:
         if os.path.isdir(possible_models):
             return path_cli, possible_models
         return path_cli, os.path.expanduser("~/whisper.cpp/models")
+
+    llama_cli = shutil.which("llama-cli")
+    homebrew_llama = "/home/linuxbrew/.linuxbrew/bin/llama-cli"
+    if not llama_cli and os.path.isfile(homebrew_llama):
+        llama_cli = homebrew_llama
+    if llama_cli:
+        raise FileNotFoundError(
+            "whisper.cpp backend is unavailable. Found llama.cpp at:\n"
+            f"  {llama_cli}\n\n"
+            "llama.cpp is a local text/multimodal model runner, not a drop-in "
+            "replacement for whisper.cpp audio transcription. Use the default "
+            "Python Whisper engine instead:\n"
+            "  --engine whisper\n"
+        )
 
     raise FileNotFoundError(
         "whisper-cli not found. Build whisper.cpp with Vulkan support:\n"
@@ -217,7 +239,7 @@ def transcribe_audio_cpp(audio_path: str, model_name: str = "turbo",
                          task: str = "transcribe",
                          diarize: bool = False,
                          dictionary_terms: list[str] | None = None) -> dict:
-    """Transcribe using whisper.cpp CLI with Vulkan GPU acceleration.
+    """Transcribe using whisper.cpp CLI.
 
     When diarize=True, passes -tdrz which inserts [SPEAKER_TURN] tokens
     into the text. The returned segments will have "speaker_turn" markers.
@@ -230,7 +252,7 @@ def transcribe_audio_cpp(audio_path: str, model_name: str = "turbo",
     cli_path, models_dir = _find_whisper_cpp()
     model_path = _ensure_cpp_model(models_dir, model_name)
 
-    print(f"\n📝 whisper.cpp ({model_name}) with Vulkan GPU")
+    print(f"\n📝 whisper.cpp ({model_name})")
     print(f"   Binary: {cli_path}")
     print(f"   Model:  {model_path}")
     if diarize:
@@ -431,7 +453,7 @@ def transcribe_dual_channel(mic_path: str, system_path: str,
     - System segments are tagged as "Speaker 1", "Speaker 2", etc.
       (via pyannote diarization if enabled, otherwise all "Others")
 
-    engine: "whisper" (Python, CPU) or "whisper-cpp" (C++, Vulkan GPU).
+    engine: "whisper" (Python, CPU) or "whisper-cpp" (legacy whisper-cli).
     Returns a unified list of segments sorted by start time.
     """
     # --- Transcribe mic (you) ---
@@ -676,172 +698,92 @@ def merge_transcript_with_speakers(whisper_segments: list[dict],
 # Summarization
 # ---------------------------------------------------------------------------
 
-def summarize_with_ollama(transcript_text: str, model: str = "qwen3:8b") -> str:
-    """Summarize using a local Ollama model (default: Qwen 3 8B)."""
-    try:
-        import ollama
-    except ImportError:
-        print("⚠️  ollama package not installed. Run: pip install ollama")
+def _find_codex_cli() -> str | None:
+    """Find the local Codex CLI binary."""
+    configured = os.environ.get("CODEX_CLI")
+    if configured and os.path.isfile(configured) and os.access(configured, os.X_OK):
+        return configured
+
+    path_codex = shutil.which("codex")
+    if path_codex:
+        return path_codex
+
+    default = os.path.expanduser("~/.local/bin/codex")
+    if os.path.isfile(default) and os.access(default, os.X_OK):
+        return default
+
+    return None
+
+
+def summarize_with_codex_cli(transcript_text: str,
+                             model: str = DEFAULT_CODEX_MODEL,
+                             reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+                             dictionary_terms: list[str] | None = None) -> str:
+    """Summarize by invoking the local Codex CLI, using existing Codex auth."""
+    codex_bin = _find_codex_cli()
+    if not codex_bin:
+        print("⚠️  codex CLI not found. Install/login to Codex CLI or set CODEX_CLI.")
         return ""
 
-    print(f"\n🤖 Summarizing with Ollama ({model})...")
-    prompt = _build_summary_prompt(transcript_text)
-
-    try:
-        response = ollama.chat(model=model, messages=[
-            {"role": "user", "content": prompt}
-        ])
-        return response["message"]["content"]
-    except Exception as e:
-        print(f"⚠️  Ollama summarization failed: {e}")
-        print(f"   Make sure the model is pulled: ollama pull {model}")
+    if reasoning_effort not in REASONING_EFFORTS:
+        print(
+            "⚠️  Invalid reasoning effort: "
+            f"{reasoning_effort}. Choose from: {', '.join(REASONING_EFFORTS)}"
+        )
         return ""
 
+    prompt = _build_summary_prompt(transcript_text, dictionary_terms)
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
 
-def _find_claude_auth_method() -> str:
-    """
-    Determine the best Claude authentication method.
+    with tempfile.NamedTemporaryFile(prefix="codex-summary-", suffix=".md", delete=False) as tmp:
+        output_path = tmp.name
 
-    Returns one of:
-      "oauth"   — CLAUDE_CODE_OAUTH_TOKEN is set → use `claude` CLI
-      "apikey"  — ANTHROPIC_API_KEY is set → use anthropic Python SDK
-      ""        — nothing found
-    """
-    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        return "oauth"
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return "apikey"
-    # Check if claude CLI is available and authenticated
-    import shutil
-    if shutil.which("claude"):
-        # claude CLI can use its own stored credentials
-        return "oauth"
-    return ""
+    cmd = [
+        codex_bin,
+        "exec",
+        "--cd", repo_dir,
+        "--sandbox", "read-only",
+        "--ephemeral",
+        "--color", "never",
+        "-m", model,
+        "-c", f'model_reasoning_effort="{reasoning_effort}"',
+        "--output-last-message", output_path,
+        "-",
+    ]
 
-
-def _summarize_via_claude_cli(prompt: str, model: str) -> str:
-    """Call the `claude` CLI in pipe mode (-p) to summarize.
-
-    This is the supported way to use subscription OAuth tokens.
-    The claude CLI reads CLAUDE_CODE_OAUTH_TOKEN and handles auth internally.
-    """
-    import shutil
-
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
-        print("⚠️  claude CLI not found on PATH.")
-        print("   Install it: https://docs.claude.com/en/docs/claude-code")
-        return ""
-
-    cmd = [claude_bin, "-p", "--model", model]
-
+    print(f"\n🤖 Summarizing with Codex CLI ({model}, reasoning={reasoning_effort})...")
     try:
         result = subprocess.run(
             cmd,
             input=prompt,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=600,
         )
+        summary = ""
+        if os.path.isfile(output_path):
+            with open(output_path, "r", encoding="utf-8") as f:
+                summary = f.read().strip()
+
         if result.returncode != 0:
-            print(f"⚠️  claude CLI failed (exit {result.returncode}):")
-            print(f"   {result.stderr.strip()}")
+            print(f"⚠️  Codex CLI failed (exit {result.returncode}):")
+            stderr = result.stderr.strip()
+            stdout = result.stdout.strip()
+            print(f"   {stderr or stdout or 'No output'}")
             return ""
-        return result.stdout.strip()
+
+        return summary or result.stdout.strip()
     except subprocess.TimeoutExpired:
-        print("⚠️  Claude CLI timed out after 120s.")
+        print("⚠️  Codex CLI timed out after 600s.")
         return ""
     except Exception as e:
-        print(f"⚠️  Claude CLI error: {e}")
+        print(f"⚠️  Codex CLI error: {e}")
         return ""
-
-
-def _summarize_via_sdk(prompt: str, model: str) -> str:
-    """Call Claude via the anthropic Python SDK with ANTHROPIC_API_KEY."""
-    try:
-        import anthropic
-    except ImportError:
-        print("⚠️  anthropic package not installed. Run: pip install anthropic")
-        return ""
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return ""
-
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model=model,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text
-    except Exception as e:
-        print(f"⚠️  Claude API call failed: {e}")
-        return ""
-
-
-def summarize_with_claude(transcript_text: str,
-                          model: str = "claude-opus-4-20250514",
-                          dictionary_terms: list[str] | None = None) -> str:
-    """
-    Summarize using Claude.
-
-    Authentication (in order of precedence):
-      1. CLAUDE_CODE_OAUTH_TOKEN env var → pipes through `claude -p` CLI
-         Set it once:  export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)
-         Or:           export CLAUDE_CODE_OAUTH_TOKEN=$(claude auth print-token)
-      2. ANTHROPIC_API_KEY env var → uses anthropic Python SDK directly
-      3. `claude` CLI on PATH → uses whatever auth claude has stored
-    """
-    auth = _find_claude_auth_method()
-
-    if not auth:
-        print("⚠️  No Claude credentials found.")
-        print("   Option A (recommended — uses your subscription):")
-        print("     claude setup-token")
-        print("     export CLAUDE_CODE_OAUTH_TOKEN=<token from above>")
-        print("   Option B (Console API key):")
-        print("     export ANTHROPIC_API_KEY=sk-ant-...")
-        return ""
-
-    print(f"\n🤖 Summarizing with Claude ({model})...")
-    prompt = _build_summary_prompt(transcript_text, dictionary_terms)
-
-    if auth == "oauth":
-        return _summarize_via_claude_cli(prompt, model)
-    else:
-        return _summarize_via_sdk(prompt, model)
-
-
-def summarize_with_openai(transcript_text: str, model: str = "gpt-4o-mini") -> str:
-    """Summarize using OpenAI API (fallback option)."""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        print("⚠️  OPENAI_API_KEY not set. Skipping summarization.")
-        return ""
-
-    try:
-        from openai import OpenAI
-    except ImportError:
-        print("⚠️  openai package not installed. Run: pip install openai")
-        return ""
-
-    print(f"\n🤖 Summarizing with OpenAI ({model})...")
-    client = OpenAI(api_key=api_key)
-    prompt = _build_summary_prompt(transcript_text)
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        print(f"⚠️  OpenAI summarization failed: {e}")
-        return ""
-
+    finally:
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
 
 
 def _build_summary_prompt(transcript_text: str,
@@ -862,17 +804,23 @@ fix any misspellings or phonetic errors in the transcript:
 into well-structured meeting notes. The speaker labeled "Me" is the person who
 requested this summary. Use this format:
 
-## Key Topics Discussed
-- Bullet points of main topics
-
-## Decisions Made
-- Any decisions or agreements reached
-
-## Action Items
-- [ ] Action item (Owner — use "Me" for the requester's items)
-
 ## Summary
-A concise 2-3 paragraph summary of the meeting.
+A concise 2-3 paragraph summary of the meeting — what was discussed, what was
+decided, and why it matters.
+
+## Decisions & Action Items
+A single list that captures each decision together with its resulting action
+(if any). This avoids repeating the same point in two separate sections.
+Format each entry as a checkbox:
+- [ ] **Decision or outcome in bold** — context or rationale. → Owner if there
+  is a follow-up task (use "Me" for the requester's items).
+If a decision has no follow-up action, omit the owner. If there is an action
+without a clear decision (e.g., a bug to investigate), just list it directly.
+Always use the `- [ ]` checkbox format for every item.
+
+## Open Questions
+- Any unresolved questions, parking-lot items, or topics deferred to a future meeting.
+  Omit this section entirely if there are none.
 {glossary_block}
 ---
 
@@ -938,8 +886,6 @@ tags:
     if summary:
         note += f"""---
 
-## Meeting Notes
-
 {summary}
 
 """
@@ -997,7 +943,7 @@ diarized to identify other speakers as "Speaker 1", "Speaker 2", etc.
         "--engine", "-e",
         default="whisper",
         choices=["whisper", "whisper-cpp"],
-        help="Transcription engine: whisper (Python, CPU) or whisper-cpp (C++, Vulkan GPU). Default: whisper",
+        help="Transcription engine: whisper (Python, CPU) or whisper-cpp (legacy, requires whisper-cli). Default: whisper",
     )
     parser.add_argument(
         "--model", "-m",
@@ -1026,18 +972,21 @@ diarized to identify other speakers as "Speaker 1", "Speaker 2", etc.
     parser.add_argument(
         "--summarize", "-s",
         action="store_true",
-        help="Generate meeting summary using an LLM",
+        help="Generate meeting summary with the local Codex CLI",
     )
     parser.add_argument(
-        "--llm",
-        default="claude",
-        choices=["claude", "ollama", "openai"],
-        help="LLM backend for summarization (default: claude — uses your OAuth token)",
-    )
-    parser.add_argument(
-        "--llm-model",
+        "--codex-model",
         default=None,
-        help="LLM model name (default: claude-opus-4-20250514 / qwen3:8b / gpt-4o-mini)",
+        help=f"Codex model for summarization (default: {DEFAULT_CODEX_MODEL})",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default=DEFAULT_REASONING_EFFORT,
+        choices=REASONING_EFFORTS,
+        help=(
+            "Codex reasoning effort for summaries "
+            f"(default: {DEFAULT_REASONING_EFFORT})"
+        ),
     )
 
     # Output options
@@ -1058,16 +1007,68 @@ diarized to identify other speakers as "Speaker 1", "Speaker 2", etc.
         help="Also save raw transcript as JSON",
     )
     parser.add_argument(
+        "--resummarize",
+        default=None,
+        metavar="TRANSCRIPT_TXT",
+        help="Re-run Codex CLI summarization on an existing transcript .txt file (skips transcription)",
+    )
+    parser.add_argument(
         "--dictionary", "--dict",
         default=None,
         help="Path to vocabulary dictionary file (default: dictionary.txt next to this script). "
-             "Terms are fed to whisper as --prompt and included in the LLM summary prompt.",
+             "Terms are fed to whisper as --prompt and included in the Codex summary prompt.",
     )
 
     args = parser.parse_args()
 
     # --- Load vocabulary dictionary ---
     dictionary_terms = load_dictionary(args.dictionary)
+
+    # =====================================================================
+    # RESUMMARIZE MODE — skip transcription, just re-run Codex summary
+    # =====================================================================
+    if args.resummarize:
+        txt_path = os.path.abspath(args.resummarize)
+        if not os.path.isfile(txt_path):
+            print(f"❌ File not found: {txt_path}")
+            sys.exit(1)
+
+        with open(txt_path, "r", encoding="utf-8") as f:
+            transcript_text = f.read()
+
+        # Derive output paths from the transcript filename
+        # e.g., 2026-04-02_meeting_1605_transcript.txt → 2026-04-02_meeting_1605.md
+        txt_name = Path(txt_path).stem  # "2026-04-02_meeting_1605_transcript"
+        if txt_name.endswith("_transcript"):
+            base = txt_name[:-11]
+        else:
+            base = txt_name
+        output_dir = os.path.dirname(txt_path) if not args.output else os.path.abspath(args.output)
+
+        print(f"📝 Re-summarizing: {txt_path}")
+
+        codex_model = args.codex_model or DEFAULT_CODEX_MODEL
+        summary = summarize_with_codex_cli(
+            transcript_text,
+            codex_model,
+            args.reasoning_effort,
+            dictionary_terms,
+        )
+
+        if not summary:
+            print("❌ Summarization produced no output.")
+            sys.exit(1)
+
+        source_label = base
+        metadata = {"model": "n/a (resummarize)", "language": "auto", "mode": "resummarize"}
+        obsidian_note = generate_obsidian_note(source_label, transcript_text, summary, metadata)
+
+        note_path = os.path.join(output_dir, f"{base}.md")
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write(obsidian_note)
+        print(f"\n📄 Obsidian note saved: {note_path}")
+        print(f"\n✅ Done! Open {note_path} in Obsidian.")
+        sys.exit(0)
 
     # --- Determine mode ---
     dual_mode = args.mic is not None or args.system is not None
@@ -1114,7 +1115,7 @@ diarized to identify other speakers as "Speaker 1", "Speaker 2", etc.
         print("=" * 60)
         print("🎙️  Meeting Transcriber — Dual-Channel Mode")
         print("=" * 60)
-        engine_label = "whisper.cpp (Vulkan GPU)" if args.engine == "whisper-cpp" else "whisper (Python/CPU)"
+        engine_label = "whisper.cpp (legacy whisper-cli)" if args.engine == "whisper-cpp" else "whisper (Python/CPU)"
         print(f"  🎤 Mic (you):     {mic_path}")
         print(f"  📡 System (them): {system_path}")
         print(f"  Engine:           {engine_label}")
@@ -1161,7 +1162,7 @@ diarized to identify other speakers as "Speaker 1", "Speaker 2", etc.
         print("=" * 60)
         print("🎙️  Meeting Transcriber — Single-File Mode")
         print("=" * 60)
-        engine_label = "whisper.cpp (Vulkan GPU)" if args.engine == "whisper-cpp" else "whisper (Python/CPU)"
+        engine_label = "whisper.cpp (legacy whisper-cli)" if args.engine == "whisper-cpp" else "whisper (Python/CPU)"
         print(f"  Audio:    {audio_path}")
         print(f"  Engine:   {engine_label}")
         print(f"  Model:    {args.model}")
@@ -1215,15 +1216,13 @@ diarized to identify other speakers as "Speaker 1", "Speaker 2", etc.
     # --- Summarize (optional) ---
     summary = ""
     if args.summarize:
-        if args.llm == "claude":
-            llm_model = args.llm_model or "claude-opus-4-20250514"
-            summary = summarize_with_claude(transcript_text, llm_model, dictionary_terms)
-        elif args.llm == "ollama":
-            llm_model = args.llm_model or "qwen3:8b"
-            summary = summarize_with_ollama(transcript_text, llm_model)
-        elif args.llm == "openai":
-            llm_model = args.llm_model or "gpt-4o-mini"
-            summary = summarize_with_openai(transcript_text, llm_model)
+        codex_model = args.codex_model or DEFAULT_CODEX_MODEL
+        summary = summarize_with_codex_cli(
+            transcript_text,
+            codex_model,
+            args.reasoning_effort,
+            dictionary_terms,
+        )
 
     # --- Generate Obsidian note ---
     metadata = {

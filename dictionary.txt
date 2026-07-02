@@ -2,8 +2,8 @@
 # Meeting Transcriber — Vocabulary Dictionary
 # =============================================================
 # Add domain-specific terms here to improve transcription accuracy.
-# These terms are fed to whisper.cpp via --prompt (biases the decoder)
-# and included in the Claude summary prompt for post-correction.
+# These terms are fed to Whisper via --prompt where supported and included
+# in the Codex summary prompt for post-correction.
 #
 # Format: one term per line. Blank lines and lines starting with # are ignored.
 # You can group terms with comment headers for readability.
@@ -18,12 +18,16 @@ Anthony
 Jesse
 Jessa
 Jim
+Erin
+Mike
 
 # --- Companies & Products ---
 Insmed
 Ciberspring
+Veeva
 
 # --- Technical Terms ---
+AI Team
 LLM
 Gemini
 Enrollment Form Wizard
@@ -31,4 +35,3 @@ Brenso
 Brensocatib
 Arikayce
 Veeva Code
-

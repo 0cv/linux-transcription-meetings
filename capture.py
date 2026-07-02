@@ -7,11 +7,11 @@ say) simultaneously. Records them as separate tracks so the transcriber can
 tag your voice as "Me" and use diarization to distinguish other speakers.
 
 Usage:
-    python capture.py                          # list audio sources
-    python capture.py --record                 # record system + mic (dual)
-    python capture.py --record --mic 5         # specify mic source index
-    python capture.py --record --system-only   # only system audio (no mic)
-    python capture.py --record --auto          # auto-transcribe when done
+    .venv/bin/python capture.py                          # list audio sources
+    .venv/bin/python capture.py --record                 # record system + mic (dual)
+    .venv/bin/python capture.py --record --mic 5         # specify mic source index
+    .venv/bin/python capture.py --record --system-only   # only system audio
+    .venv/bin/python capture.py --record --auto          # auto-transcribe when done
 
 How it works:
     1. Finds your default monitor source (system audio loopback)
@@ -22,7 +22,6 @@ How it works:
        to know exactly which audio is "Me" vs "Others"
 
 Requirements:
-    pip install numpy scipy
     # parec + ffmpeg must be available
     # PipeWire or PulseAudio must be running (default on Fedora)
 """
@@ -37,6 +36,10 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+
+DEFAULT_CODEX_MODEL = "gpt-5.5"
+DEFAULT_REASONING_EFFORT = "xhigh"
+REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh")
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +367,7 @@ def main():
         epilog="""
 How dual-source capture works:
   Your mic is recorded separately from system audio (Teams/Zoom/Meet).
-  This lets the transcriber tag your voice as "Me" with 100% accuracy,
+  This lets the transcriber tag your voice as "Me" with 100%% accuracy,
   then use diarization to distinguish other speakers on the call.
 
 Examples:
@@ -373,6 +376,7 @@ Examples:
   %(prog)s --record --mic 5                       # specify mic by index
   %(prog)s --record --system-only                 # system audio only (no mic)
   %(prog)s --record --auto --diarize --summarize  # full pipeline
+  %(prog)s --record --auto --summarize            # record + Codex CLI summary
   %(prog)s --record --name "weekly-standup"        # custom filename
         """,
     )
@@ -427,7 +431,7 @@ Examples:
         "--engine", "-e",
         default="whisper",
         choices=["whisper", "whisper-cpp"],
-        help="Transcription engine: whisper (Python/CPU) or whisper-cpp (C++/Vulkan GPU). Default: whisper",
+        help="Transcription engine: whisper (Python/CPU) or whisper-cpp (legacy, requires whisper-cli). Default: whisper",
     )
     parser.add_argument(
         "--model", "-m",
@@ -443,13 +447,21 @@ Examples:
     parser.add_argument(
         "--summarize", "-s",
         action="store_true",
-        help="Enable summarization in auto-transcription",
+        help="Enable Codex CLI summarization in auto-transcription",
     )
     parser.add_argument(
-        "--llm",
-        default="claude",
-        choices=["claude", "ollama", "openai"],
-        help="LLM backend for summarization (default: claude — uses your OAuth token)",
+        "--codex-model",
+        default=None,
+        help=f"Codex model for summarization (default: {DEFAULT_CODEX_MODEL})",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default=DEFAULT_REASONING_EFFORT,
+        choices=REASONING_EFFORTS,
+        help=(
+            "Codex reasoning effort for summaries "
+            f"(default: {DEFAULT_REASONING_EFFORT})"
+        ),
     )
     parser.add_argument(
         "--no-detect",
@@ -470,8 +482,9 @@ Examples:
     if not args.record:
         print_sources(sources)
         print("To start recording (mic + system audio):")
-        print("  python capture.py --record")
-        print("  python capture.py --record --auto --diarize --summarize")
+        print("  meeting")
+        print("  .venv/bin/python capture.py --record")
+        print("  .venv/bin/python capture.py --record --auto --diarize --summarize")
         return
 
     # --- Resolve monitor source ---
@@ -597,8 +610,8 @@ Examples:
             _run_transcription(args, output_dir, paths)
         else:
             print(f"\nTo transcribe:")
-            print(f"  python transcribe.py --mic {paths['mic']} --system {paths['system']}")
-            print(f"  python transcribe.py --mic {paths['mic']} --system {paths['system']} --diarize --summarize")
+            print(f"  .venv/bin/python transcribe.py --mic {paths['mic']} --system {paths['system']}")
+            print(f"  .venv/bin/python transcribe.py --mic {paths['mic']} --system {paths['system']} --diarize --summarize")
 
     else:
         # Single-source mode
@@ -629,7 +642,7 @@ Examples:
             _run_transcription(args, output_dir, paths)
         else:
             print(f"\nTo transcribe:")
-            print(f"  python transcribe.py {wav_path}")
+            print(f"  .venv/bin/python transcribe.py {wav_path}")
 
 
 def _run_transcription(args, output_dir: str, paths: dict):
@@ -637,8 +650,14 @@ def _run_transcription(args, output_dir: str, paths: dict):
     print(f"\n🚀 Starting transcription...")
     script_dir = os.path.dirname(os.path.abspath(__file__))
     transcribe_script = os.path.join(script_dir, "transcribe.py")
+    venv_python = os.path.join(script_dir, ".venv", "bin", "python")
+    python_bin = os.environ.get("TRANSCRIPTION_PYTHON")
+    if not python_bin and os.path.isfile(venv_python) and os.access(venv_python, os.X_OK):
+        python_bin = venv_python
+    if not python_bin:
+        python_bin = sys.executable
 
-    cmd = [sys.executable, transcribe_script]
+    cmd = [python_bin, transcribe_script]
 
     # Pass dual-channel paths if available
     if paths.get("mic") and paths.get("system"):
@@ -655,7 +674,9 @@ def _run_transcription(args, output_dir: str, paths: dict):
         cmd.append("--diarize")
     if args.summarize:
         cmd.append("--summarize")
-        cmd.extend(["--llm", args.llm])
+        if args.codex_model:
+            cmd.extend(["--codex-model", args.codex_model])
+        cmd.extend(["--reasoning-effort", args.reasoning_effort])
 
     cmd.extend(["--output", output_dir])
 
